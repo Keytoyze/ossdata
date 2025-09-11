@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 from datetime import datetime, date
 import os
+import time
 from typing import List
 
 
@@ -25,6 +26,7 @@ def execute_oss_commands(args, retries=40):
             print(f"======= ERROR happens in command: {args}. Remaining retry count: {retries} =======")
             if retries <= 0:
                 raise e
+            time.sleep(3)
 
 
 def get_item(name: str, version: str, instance_id: str, key: str | None):
