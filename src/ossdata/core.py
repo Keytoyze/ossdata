@@ -1,38 +1,33 @@
 import os
-import subprocess
-from pathlib import Path
 import json
 from datetime import datetime, date
 import os
-import time
 from typing import List
+import alibabacloud_oss_v2 as oss
 
-
-OSS_DATASET_PATH = os.getenv("OSS_BASE_PATH", "oss://ofasys-ap/datasets")
+OSS_BUCKET = os.getenv("OSS_BUCKET", "ofasys-ap")
 assert "OSS_ACCESS_KEY_ID" in os.environ, "Please set OSS_ACCESS_KEY_ID in environment variables"
 assert "OSS_ACCESS_KEY_SECRET" in os.environ, "Please set OSS_ACCESS_KEY_SECRET in environment variables"
 assert "OSS_REGION" in os.environ, "Please set OSS_REGION in environment variables"
 assert "OSS_ENDPOINT" in os.environ, "Please set OSS_ENDPOINT in environment variables"
 
 
-def execute_oss_commands(args, retries=40):
-    args = ["ossutil"] + args
-    while True:
-        try:
-            return subprocess.run(args, check=True, capture_output=True, text=True).stdout
-        except subprocess.CalledProcessError as e:
-            print(e.stderr)
-            retries -= 1
-            print(f"======= ERROR happens in command: {args}. Remaining retry count: {retries} =======")
-            if retries <= 0:
-                raise e
-            time.sleep(3)
+credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
+cfg = oss.config.load_default()
+cfg.retryer = oss.retry.StandardRetryer(max_attempts=40)
+cfg.credentials_provider = credentials_provider
+cfg.region = os.environ["OSS_REGION"]
+cfg.endpoint = os.environ["OSS_ENDPOINT"]
+client = oss.Client(cfg)
 
 
-def get_item(name: str, version: str, instance_id: str, key: str | None):
-    result = execute_oss_commands([
-        "cat", f"{OSS_DATASET_PATH}/{name}/{version}/{instance_id}.json", "-q"
-    ])
+def get_item(name: str, version: str, instance_id: str, key: str | None = None):
+    response = client.get_object(oss.GetObjectRequest(
+        bucket=OSS_BUCKET,  # 指定存储空间名称
+        key=f"datasets/{name}/{version}/{instance_id}.json",  # 指定对象键名
+    ))
+    with response.body as body_stream:
+        result = body_stream.read().decode()
     if key is not None:
         return json.loads(result)[key]
     else:
@@ -42,13 +37,34 @@ def get_item(name: str, version: str, instance_id: str, key: str | None):
 def list_dir(path: str) -> List[str]:
     if not path.endswith("/"):
         path += "/"
-    result = [
-        x.strip().replace(path, "").rstrip("/") for x in execute_oss_commands(
-            ["ls", path, "--short-format", "-qd"]
-        ).splitlines() if x.startswith("oss://")
-    ]
+    paginator = client.list_objects_v2_paginator()
+    result = []
+    for page in paginator.iter_page(oss.ListObjectsV2Request(
+            bucket=OSS_BUCKET,
+            prefix=path,
+            delimiter="/",
+        )
+    ):
+        if page is not None and page.common_prefixes:
+            for prefix in page.common_prefixes:
+                result.append(prefix.prefix.replace(path, "").rstrip("/"))
     return result
 
+
+def list_objects(path: str) -> List[str]:
+    if not path.endswith("/"):
+        path += "/"
+    paginator = client.list_objects_v2_paginator()
+    result = []
+    for page in paginator.iter_page(oss.ListObjectsV2Request(
+            bucket=OSS_BUCKET,
+            prefix=path,
+        )
+    ):
+        if page is not None and page.contents:
+            for o in page.contents:
+                result.append(o.key.replace(path, ""))
+    return result
 
 def datetime_serializer(obj):
     """JSON serializer for objects not serializable by default json code"""
@@ -68,30 +84,26 @@ def upload_to_oss(item, name, split, revision, docker_image_prefix):
     item["dataset"] = name
     item["split"] = split
     item["revision"] = revision
-    temp_path = Path(f"/dev/shm/{instance_id}.json")
-    try:
-        temp_path.write_text(json.dumps(item, default=datetime_serializer))
-        execute_oss_commands([
-            "cp", "-f", 
-            str(temp_path.resolve()), f"{OSS_DATASET_PATH}/{name}/{version}/{instance_id}.json", 
-            "--retry-times=500", "-u"
-        ])
-    finally:
-        temp_path.unlink(missing_ok=True)
+    key = f"datasets/{name}/{version}/{instance_id}.json"
+    client.put_object(oss.PutObjectRequest(
+        bucket=OSS_BUCKET,
+        key=key,
+        body=json.dumps(item, default=datetime_serializer).encode('utf-8'),
+    ))
 
 
 def get_all_datasets() -> List[str]:
     result = []
-    for ds_repo in list_dir(OSS_DATASET_PATH):
-        for ds_name in list_dir(f"{OSS_DATASET_PATH}/{ds_repo}"):
+    for ds_repo in list_dir("datasets"):
+        for ds_name in list_dir(f"datasets/{ds_repo}"):
             result.append(f"{ds_repo}/{ds_name}")
     return result
 
+
 def get_all_versions(name) -> List[str]:
-    return list_dir(f"{OSS_DATASET_PATH}/{name}/")
+    return list_dir(f"datasets/{name}/")
 
 
 def get_all_instance_ids(name, version) -> List[str]:
-    return [x.replace(".json", "") for x in list_dir(f"{OSS_DATASET_PATH}/{name}/{version}")]
-
+    return [x.replace(".json", "") for x in list_objects(f"datasets/{name}/{version}")]
 

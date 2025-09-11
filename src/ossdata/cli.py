@@ -5,7 +5,7 @@ from datasets import load_dataset
 from tqdm import tqdm
 import functools
 import multiprocessing
-from ossdata.core import upload_to_oss, get_item, get_all_datasets, get_all_versions, get_all_instance_ids
+from ossdata.core import upload_to_oss, get_item, get_all_datasets, get_all_versions, get_all_instance_ids, list_objects
 
 
 def main():
@@ -21,9 +21,20 @@ def main():
     )
     upload_parser.add_argument("--name", required=True, help="Dataset name (e.g., 'princeton-nlp/SWE-bench')")
     upload_parser.add_argument("--split", required=True, help="Dataset split (e.g., 'test', 'train')")
-    upload_parser.add_argument("--docker-image-prefix", help="Docker image prefix for instances")
     upload_parser.add_argument("--revision", help="Optional Hugging Face dataset revision")
-    upload_parser.add_argument("-j", type=int, help="Number of parallel jobs")
+    upload_parser.add_argument("--input-file", help="Input json lines file")
+    upload_parser.add_argument("--docker-image-prefix", help="Docker image prefix for instances")
+    upload_parser.add_argument("-j", default=1, type=int, help="Number of parallel jobs")
+    upload_parser.add_argument("--force", action="store_true", help="Force update the dataset if exists")
+
+    download_parser = subparsers.add_parser(
+        "download",
+        help="Download an OSS dataset as a jsonl file."
+    )
+    download_parser.add_argument("--name", required=True, help="Dataset name (e.g., 'princeton-nlp/SWE-bench')")
+    download_parser.add_argument("--version", required=True, help="Dataset version, (e.g., 'test', 'train')")
+    download_parser.add_argument("--output-file", required=True, help="Output json line file")
+    download_parser.add_argument("-j", default=None, type=int, help="Number of parallel jobs")
 
     ls_parser = subparsers.add_parser(
         "ls",
@@ -49,12 +60,37 @@ def main():
         handle_ls(args)
     elif args.command == "get":
         handle_get(args)
+    elif args.command == "download":
+        handle_download(args)
+
+
+def get_item_wrapper(args):
+    return get_item(*args)
+
+
+def handle_download(args):
+    instance_ids = get_all_instance_ids(args.name, args.version)
+    with multiprocessing.Pool(processes=args.j) as pool:
+        with open(args.output_file, "w") as f:
+            for result in tqdm(pool.imap_unordered(
+                get_item_wrapper,
+                [(args.name, args.version, instance_id, None) for instance_id in instance_ids],
+            ), total=len(instance_ids)):
+                f.write(result + "\n")
 
 
 # 处理 upload 命令
 def handle_upload(args):
-    if args.name.endswith(".jsonl"):
-        ds = load_dataset("json", data_files=args.name, split=args.split)
+    version = args.split
+    if args.revision is not None:
+        version += f"@{args.revision}"
+
+    if len(list_objects(f"datasets/{args.name}/{version}/")) != 0 and not args.force:
+        print(f"Dataset '{args.name}/{version}' is not empty. Please use --force to update this dataset!")
+        exit(-1)
+
+    if args.input_file is not None:
+        ds = load_dataset("json", data_files=args.input_file, split="train")
     else:
         ds = load_dataset(args.name, split=args.split, revision=args.revision)
     with multiprocessing.Pool(processes=args.j) as pool:
