@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import sys
-from datasets import load_dataset
 from tqdm import tqdm
 import functools
 import multiprocessing
@@ -81,6 +80,7 @@ def handle_download(args):
 
 # 处理 upload 命令
 def handle_upload(args):
+    from datasets import load_dataset
     version = args.split
     if args.revision is not None:
         version += f"@{args.revision}"
