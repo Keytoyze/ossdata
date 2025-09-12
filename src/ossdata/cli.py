@@ -4,6 +4,7 @@ import sys
 from tqdm import tqdm
 import functools
 import multiprocessing
+import json
 from ossdata.core import upload_to_oss, get_item, get_all_datasets, get_all_versions, get_all_instance_ids, list_objects
 
 
@@ -80,7 +81,6 @@ def handle_download(args):
 
 # 处理 upload 命令
 def handle_upload(args):
-    from datasets import load_dataset
     version = args.split
     if args.revision is not None:
         version += f"@{args.revision}"
@@ -90,9 +90,18 @@ def handle_upload(args):
         exit(-1)
 
     if args.input_file is not None:
-        ds = load_dataset("json", data_files=args.input_file, split="train")
+        ds = map(
+            lambda x: json.loads(x), 
+            filter(
+                lambda x: x.strip() != "",
+                open(args.input_file)
+            )
+        )
+        length = None
     else:
+        from datasets import load_dataset
         ds = load_dataset(args.name, split=args.split, revision=args.revision)
+        length = len(ds)
     with multiprocessing.Pool(processes=args.j) as pool:
         for _ in tqdm(pool.imap_unordered(
             functools.partial(
@@ -102,7 +111,7 @@ def handle_upload(args):
                 revision=args.revision, 
                 docker_image_prefix=args.docker_image_prefix
             ), ds
-        ), total=len(ds)):
+        ), total=length):
             pass
 
 
