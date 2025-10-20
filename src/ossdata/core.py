@@ -6,6 +6,8 @@ from typing import List
 import alibabacloud_oss_v2 as oss
 
 OSS_BUCKET = os.getenv("OSS_BUCKET", "ofasys-ap")
+OSS_DATASET_PATH = os.getenv("OSS_DATASET_PATH", "datasets")
+
 assert "OSS_ACCESS_KEY_ID" in os.environ, "Please set OSS_ACCESS_KEY_ID in environment variables"
 assert "OSS_ACCESS_KEY_SECRET" in os.environ, "Please set OSS_ACCESS_KEY_SECRET in environment variables"
 assert "OSS_REGION" in os.environ, "Please set OSS_REGION in environment variables"
@@ -24,7 +26,7 @@ client = oss.Client(cfg)
 def get_item(name: str, version: str, instance_id: str, key: str | None = None):
     response = client.get_object(oss.GetObjectRequest(
         bucket=OSS_BUCKET,  # 指定存储空间名称
-        key=f"datasets/{name}/{version}/{instance_id}.json",  # 指定对象键名
+        key=f"{OSS_DATASET_PATH}/{name}/{version}/{instance_id}.json",  # 指定对象键名
     ))
     with response.body as body_stream:
         result = body_stream.read().decode()
@@ -84,7 +86,7 @@ def upload_to_oss(item, name, split, revision, docker_image_prefix):
     item["dataset"] = name
     item["split"] = split
     item["revision"] = revision
-    key = f"datasets/{name}/{version}/{instance_id}.json"
+    key = f"{OSS_DATASET_PATH}/{name}/{version}/{instance_id}.json"
     client.put_object(oss.PutObjectRequest(
         bucket=OSS_BUCKET,
         key=key,
@@ -94,16 +96,16 @@ def upload_to_oss(item, name, split, revision, docker_image_prefix):
 
 def get_all_datasets() -> List[str]:
     result = []
-    for ds_repo in list_dir("datasets"):
-        for ds_name in list_dir(f"datasets/{ds_repo}"):
+    for ds_repo in list_dir(f"{OSS_DATASET_PATH}"):
+        for ds_name in list_dir(f"{OSS_DATASET_PATH}/{ds_repo}"):
             result.append(f"{ds_repo}/{ds_name}")
     return result
 
 
 def get_all_versions(name) -> List[str]:
-    return list_dir(f"datasets/{name}/")
+    return list_dir(f"{OSS_DATASET_PATH}/{name}/")
 
 
 def get_all_instance_ids(name, version) -> List[str]:
-    return [x.replace(".json", "") for x in list_objects(f"datasets/{name}/{version}")]
+    return [x.replace(".json", "") for x in list_objects(f"{OSS_DATASET_PATH}/{name}/{version}")]
 

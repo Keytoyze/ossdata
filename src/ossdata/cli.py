@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import argparse
-import sys
+import sys, os
 from tqdm import tqdm
 import functools
 import multiprocessing
@@ -85,7 +85,8 @@ def handle_upload(args):
     if args.revision is not None:
         version += f"@{args.revision}"
 
-    if len(list_objects(f"datasets/{args.name}/{version}/")) != 0 and not args.force:
+    dataset_bucket = os.environ.get("OSS_DATASET_PATH", "datasets")
+    if len(list_objects(f"{dataset_bucket}/{args.name}/{version}/")) != 0 and not args.force:
         print(f"Dataset '{args.name}/{version}' is not empty. Please use --force to update this dataset!")
         exit(-1)
 
