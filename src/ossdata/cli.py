@@ -5,7 +5,7 @@ from tqdm import tqdm
 import functools
 import multiprocessing
 import json
-from ossdata.core import upload_to_oss, get_item, get_all_datasets, get_all_versions, get_all_instance_ids, list_objects
+from ossdata.core import upload_to_oss, get_item, get_all_datasets, get_all_versions, get_all_instance_ids, list_objects, OSS_DATASET_PATH
 
 
 def main():
@@ -85,7 +85,7 @@ def handle_upload(args):
     if args.revision is not None:
         version += f"@{args.revision}"
 
-    dataset_bucket = os.environ.get("OSS_DATASET_PATH", "datasets")
+    dataset_bucket = OSS_DATASET_PATH
     if len(list_objects(f"{dataset_bucket}/{args.name}/{version}/")) != 0 and not args.force:
         print(f"Dataset '{args.name}/{version}' is not empty. Please use --force to update this dataset!")
         exit(-1)
