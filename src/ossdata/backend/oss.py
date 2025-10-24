@@ -51,6 +51,7 @@ def list_dir(path: str) -> List[str]:
         if page is not None and page.common_prefixes:
             for prefix in page.common_prefixes:
                 result.append(prefix.prefix.replace(path, "").rstrip("/"))
+    result = [x for x in result if x.strip() != ""]
     return result
 
 
@@ -67,6 +68,7 @@ def list_objects(path: str) -> List[str]:
         if page is not None and page.contents:
             for o in page.contents:
                 result.append(o.key.replace(path, ""))
+    result = [x for x in result if x.strip() != ""]
     return result
 
 def datetime_serializer(obj):
