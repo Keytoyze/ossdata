@@ -3,12 +3,13 @@ import json
 from datetime import datetime, date
 import os
 from typing import List
+import time
 import alibabacloud_oss_v2 as oss
 
-OSS_BUCKET = os.getenv("OSS_BUCKET", "ofasys-ap")
-OSS_DATASET_PATH = os.getenv("OSS_DATASET_PATH", "datasets")
+OSS_BUCKET = os.getenv("OSS_BUCKET", "ofasys-wlcb-toshanghai")
+OSS_DATASET_PATH = os.getenv("OSS_DATASET_PATH", "swe/datasets")
 
-def get_client():
+def get_client(retry_attempts=400):
     assert "OSS_ACCESS_KEY_ID" in os.environ, "Please set OSS_ACCESS_KEY_ID in environment variables"
     assert "OSS_ACCESS_KEY_SECRET" in os.environ, "Please set OSS_ACCESS_KEY_SECRET in environment variables"
     assert "OSS_REGION" in os.environ, "Please set OSS_REGION in environment variables"
@@ -16,7 +17,7 @@ def get_client():
 
     credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
     cfg = oss.config.load_default()
-    cfg.retryer = oss.retry.StandardRetryer(max_attempts=40)
+    cfg.retryer = oss.retry.StandardRetryer(max_attempts=retry_attempts)
     cfg.credentials_provider = credentials_provider
     cfg.region = os.environ["OSS_REGION"]
     cfg.endpoint = os.environ["OSS_ENDPOINT"]
@@ -90,12 +91,20 @@ def upload(item, name, split, revision, docker_image_prefix):
     item["split"] = split
     item["revision"] = revision
     key = f"{OSS_DATASET_PATH}/{name}/{version}/{instance_id}.json"
-    get_client().put_object(oss.PutObjectRequest(
-        bucket=OSS_BUCKET,
-        key=key,
-        body=json.dumps(item, default=datetime_serializer).encode('utf-8'),
-    ))
-
+    n_retries = 100
+    while n_retries > 0:
+        try:
+            get_client(retry_attempts=1).put_object(oss.PutObjectRequest(
+                bucket=OSS_BUCKET,
+                key=key,
+                body=json.dumps(item, default=datetime_serializer).encode('utf-8'),
+            ))
+            break
+        except Exception as e:
+            time.sleep(1)
+            n_retries -= 1
+            if n_retries <= 0:
+                raise e
 
 def get_all_datasets() -> List[str]:
     result = []
