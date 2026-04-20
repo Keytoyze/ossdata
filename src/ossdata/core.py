@@ -34,6 +34,27 @@ def get_item(name: str, version: str, instance_id: str, key: str | None = None,
                      oss_endpoint=oss_endpoint)
 
 
+def get_items_batch(name: str, version: str, instance_ids: list, key: str | None = None,
+                    oss_access_key_id=None, oss_access_key_secret=None, oss_region=None, oss_endpoint=None,
+                    max_workers: int = 20) -> dict:
+    """
+    Retrieve multiple items in parallel with a shared client.
+
+    :param name: Dataset name
+    :param version: Dataset version (=split@revision)
+    :param instance_ids: List of instance IDs to fetch
+    :param key: Specific key to extract from each JSON object
+    :param max_workers: Thread pool size
+    :return: Dict of {instance_id: item_content}
+    """
+    return B.get_items_batch(name, version, instance_ids, key,
+                             oss_access_key_id=oss_access_key_id,
+                             oss_access_key_secret=oss_access_key_secret,
+                             oss_region=oss_region,
+                             oss_endpoint=oss_endpoint,
+                             max_workers=max_workers)
+
+
 def list_dir(path: str, oss_access_key_id=None, oss_access_key_secret=None, oss_region=None, oss_endpoint=None) -> List[str]:
     """
     List directories under a given path in storage.

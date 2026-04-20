@@ -3,6 +3,7 @@ import json
 from datetime import datetime, date
 from typing import List
 import time
+import threading
 from functools import wraps
 import alibabacloud_oss_v2 as oss
 import traceback
@@ -36,35 +37,57 @@ def retry(max_retries=100, delay_seconds=1):
     return decorator
 
 
+_default_client = None
+_default_client_lock = threading.Lock()
+
+
 def get_client(oss_access_key_id=None, oss_access_key_secret=None, oss_region=None, oss_endpoint=None):
     """
-    Create and return an OSS client instance.
-    
+    Return an OSS client instance. Reuses a cached singleton when called
+    with default (env-var) credentials; creates a fresh client when
+    explicit credentials are provided.
+
     :param oss_access_key_id: OSS access key ID, if None uses environment variable
     :param oss_access_key_secret: OSS access key secret, if None uses environment variable
     :param oss_region: OSS region, if None uses environment variable
     :param oss_endpoint: OSS endpoint, if None uses environment variable
     :return: OSS client instance
     """
-    if oss_access_key_id is not None and oss_access_key_secret is not None:
-        credentials_provider = oss.credentials.StaticCredentialsProvider(
-            access_key_id=oss_access_key_id,
-            access_key_secret=oss_access_key_secret
-        )
-    else:
-        assert "OSS_ACCESS_KEY_ID" in os.environ, "Please set OSS_ACCESS_KEY_ID in environment variables"
-        assert "OSS_ACCESS_KEY_SECRET" in os.environ, "Please set OSS_ACCESS_KEY_SECRET in environment variables"
-        credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
-    
-    cfg = oss.config.load_default()
-    cfg.retryer = oss.retry.StandardRetryer(max_attempts=1)
-    cfg.credentials_provider = credentials_provider
-    
-    cfg.region = oss_region or os.environ["OSS_REGION"]
-    cfg.endpoint = oss_endpoint or os.environ["OSS_ENDPOINT"]
-    
-    client = oss.Client(cfg)
-    return client
+    global _default_client
+
+    explicit_creds = oss_access_key_id is not None and oss_access_key_secret is not None
+    use_cache = not explicit_creds and oss_region is None and oss_endpoint is None
+
+    if use_cache and _default_client is not None:
+        return _default_client
+
+    with _default_client_lock:
+        if use_cache and _default_client is not None:
+            return _default_client
+
+        if explicit_creds:
+            credentials_provider = oss.credentials.StaticCredentialsProvider(
+                access_key_id=oss_access_key_id,
+                access_key_secret=oss_access_key_secret
+            )
+        else:
+            assert "OSS_ACCESS_KEY_ID" in os.environ, "Please set OSS_ACCESS_KEY_ID in environment variables"
+            assert "OSS_ACCESS_KEY_SECRET" in os.environ, "Please set OSS_ACCESS_KEY_SECRET in environment variables"
+            credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
+
+        cfg = oss.config.load_default()
+        cfg.retryer = oss.retry.StandardRetryer(max_attempts=1)
+        cfg.credentials_provider = credentials_provider
+
+        cfg.region = oss_region or os.environ["OSS_REGION"]
+        cfg.endpoint = oss_endpoint or os.environ["OSS_ENDPOINT"]
+
+        client = oss.Client(cfg)
+
+        if use_cache:
+            _default_client = client
+
+        return client
 
 
 @retry(max_retries=100, delay_seconds=1)
@@ -98,6 +121,54 @@ def get_item(name: str, version: str, instance_id: str, key: str | None = None,
         return json.loads(result)[key]
     else:
         return result
+
+
+def get_items_batch(name: str, version: str, instance_ids: list, key: str | None = None,
+                    oss_access_key_id=None, oss_access_key_secret=None, oss_region=None, oss_endpoint=None,
+                    max_workers: int = 20) -> dict:
+    """
+    Retrieve multiple items in parallel with a shared OSS client.
+
+    :param name: Dataset name
+    :param version: Dataset version
+    :param instance_ids: List of instance IDs to fetch
+    :param key: Specific key to extract from each JSON object
+    :param max_workers: Thread pool size
+    :return: Dict of {instance_id: item_content}
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    client = get_client(
+        oss_access_key_id=oss_access_key_id,
+        oss_access_key_secret=oss_access_key_secret,
+        oss_region=oss_region,
+        oss_endpoint=oss_endpoint,
+    )
+
+    def _fetch_one(iid):
+        for attempt in range(5):
+            try:
+                resp = client.get_object(oss.GetObjectRequest(
+                    bucket=OSS_BUCKET,
+                    key=f"{OSS_DATASET_PATH}/{name}/{version}/{iid}.json",
+                ))
+                with resp.body as body:
+                    result = body.read().decode()
+                if key is not None:
+                    return iid, json.loads(result)[key]
+                return iid, result
+            except Exception:
+                if attempt < 4:
+                    time.sleep(0.5)
+        return iid, None
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_fetch_one, iid): iid for iid in instance_ids}
+        for future in as_completed(futures):
+            iid, content = future.result()
+            results[iid] = content
+    return results
 
 
 @retry(max_retries=100, delay_seconds=1)
